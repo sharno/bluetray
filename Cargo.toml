@@ -1,0 +1,8 @@
+[package]
+name = "bluetray"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tao = "0.32.8"
+tray-icon = "0.20.0"
