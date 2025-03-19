@@ -4,5 +4,15 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+btleplug = "0.11.7"
+tokio = { version = "1.44.1", features = ["full"] }
 tao = "0.32.8"
 tray-icon = "0.20.0"
+windows = { version = "0.61.1", features = [
+    "Devices_Bluetooth",
+    "Devices_Enumeration",
+    "Foundation",
+    "Foundation_Collections",
+    "Devices_Bluetooth_GenericAttributeProfile",
+] }
+windows-future = "0.2.0"

@@ -4,24 +4,37 @@
 
 #![allow(unused)]
 
+use std::collections::HashMap;
 use std::vec;
 
+use btleplug::api::{Central, Manager as _, Peripheral, ScanFilter};
+use btleplug::platform::{Adapter, Manager};
+use std::time::Duration;
 use tao::{
     event::Event,
     event_loop::{ControlFlow, EventLoopBuilder},
 };
+use tokio::runtime::Runtime;
 use tray_icon::{
     menu::{AboutMetadata, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     Icon, TrayIconBuilder, TrayIconEvent,
 };
+use windows::core::{Error, RuntimeType, HSTRING};
+use windows::Devices::Bluetooth::GenericAttributeProfile::GattSession;
+use windows::Devices::Bluetooth::{BluetoothDevice, BluetoothLEDevice};
+use windows::Devices::Enumeration::DeviceInformation;
+use windows::Foundation::TypedEventHandler;
+use windows_future::IAsyncOperation;
 
 enum UserEvent {
     TrayIconEvent(tray_icon::TrayIconEvent),
     MenuEvent(tray_icon::menu::MenuEvent),
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+    let rt = Runtime::new().unwrap();
 
     // set a tray event handler that forwards the event and wakes up the event loop
     let proxy = event_loop.create_proxy();
@@ -36,20 +49,48 @@ fn main() {
     }));
 
     let tray_menu = Menu::new();
-
     let quit_i = MenuItem::new("Quit", true, None);
+
+    // Get Bluetooth devices
+    let bluetooth_devices = get_paired_bluetooth_devices().await.unwrap();
+
+    // Store device info mapped to menu items
+    let mut device_map = HashMap::new();
+    let device_items: Vec<MenuItem> = bluetooth_devices
+        .iter()
+        .map(|device_info| {
+            let item = MenuItem::new(
+                device_info
+                    .Name()
+                    .expect("device name doesn't exist")
+                    .to_string(),
+                true,
+                None,
+            );
+            device_map.insert(item.id().clone(), device_info.Id().unwrap());
+            item
+        })
+        .collect();
+
     tray_menu.append_items(&[
         &PredefinedMenuItem::about(
             None,
             Some(AboutMetadata {
-                name: Some("tao".to_string()),
-                copyright: Some("Copyright tao".to_string()),
+                name: Some("Bluetooth Tray".to_string()),
+                copyright: Some("Copyright bluetray".to_string()),
                 ..Default::default()
             }),
         ),
         &PredefinedMenuItem::separator(),
-        &quit_i,
     ]);
+
+    // Add device menu items
+    for item in &device_items {
+        tray_menu.append(item);
+    }
+
+    tray_menu.append(&PredefinedMenuItem::separator());
+    tray_menu.append(&quit_i);
 
     let mut tray_icon = None;
 
@@ -61,7 +102,7 @@ fn main() {
 
         match event {
             Event::NewEvents(tao::event::StartCause::Init) => {
-                let icon = Icon::from_rgba(vec![0, 0, 0, 0], 1, 1).unwrap();
+                let icon = Icon::from_rgba(vec![200, 200, 0, 0], 1, 1).unwrap();
 
                 // We create the icon once the event loop is actually running
                 // to prevent issues like https://github.com/tauri-apps/tray-icon/issues/90
@@ -95,10 +136,43 @@ fn main() {
                 if event.id == quit_i.id() {
                     tray_icon.take();
                     *control_flow = ControlFlow::Exit;
+                } else if let Some(device_id) = device_map.get(&event.id) {
+                    if let Err(e) = connect_to_bluetooth_device(device_id) {
+                        println!("Failed to connect to device: {}", e);
+                    }
                 }
             }
 
             _ => {}
         }
     })
+}
+
+async fn get_paired_bluetooth_devices() -> Result<Vec<DeviceInformation>, Error> {
+    // Define a query for paired Bluetooth devices
+    let selector = BluetoothDevice::GetDeviceSelectorFromPairingState(true)?;
+
+    // Find all paired devices
+    let devices_operation = DeviceInformation::FindAllAsyncAqsFilter(&selector)?;
+    let devices: Vec<_> = devices_operation.get()?.into_iter().collect();
+
+    // let mut device_names = Vec::new();
+
+    // Iterate through each device
+    // for device in devices {
+    //     if let Ok(name) = device.Name() {
+    //         device_names.push(name.to_string());
+    //     }
+    // }
+
+    Ok(devices)
+}
+
+fn connect_to_bluetooth_device(device_id: &HSTRING) -> Result<(), Error> {
+    // Create connection operation
+    let device = BluetoothLEDevice::FromIdAsync(device_id)?.get()?;
+    let gatt_services = device.GetGattServicesAsync()?.get()?;
+    let session = GattSession::FromDeviceIdAsync(&device.BluetoothDeviceId()?)?.get()?;
+    session.SetMaintainConnection(true);
+    Ok(())
 }
