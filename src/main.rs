@@ -10,7 +10,7 @@ use tray_icon::{
     menu::{AboutMetadata, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     Icon, TrayIconBuilder, TrayIconEvent,
 };
-use windows::core::{Error, RuntimeType, HSTRING};
+use windows::{core::{Error, RuntimeType, HSTRING}, Devices::Bluetooth::Rfcomm::RfcommDeviceService, Networking::Sockets::{SocketProtectionLevel, StreamSocket, StreamSocketListener}};
 use windows::Devices::Bluetooth::GenericAttributeProfile::GattSession;
 use windows::Devices::Bluetooth::{BluetoothDevice, BluetoothLEDevice};
 use windows::Devices::Enumeration::DeviceInformation;
@@ -138,10 +138,8 @@ async fn main() {
 }
 
 async fn get_paired_bluetooth_devices() -> Result<Vec<DeviceInformation>, Error> {
-    // Define a query for paired Bluetooth LE devices
+    // RfcommDeviceService::GetDeviceSelector(bluetoothdevice)
     let selector = BluetoothDevice::GetDeviceSelectorFromPairingState(true)?;
-
-    // Find all paired devices
     let devices_operation = DeviceInformation::FindAllAsyncAqsFilter(&selector)?;
     let devices: Vec<_> = devices_operation.get()?.into_iter().collect();
 
@@ -151,31 +149,16 @@ async fn get_paired_bluetooth_devices() -> Result<Vec<DeviceInformation>, Error>
 fn connect_to_bluetooth_device(device_id: &HSTRING) -> Result<(), Error> {
     println!("Attempting to connect to device with ID: {:?}", device_id);
     
-    // Create connection operation
-    let device = match BluetoothLEDevice::FromIdAsync(device_id) {
-        Ok(operation) => match operation.get() {
-            Ok(device) => device,
-            Err(e) => {
-                println!("Failed to get device from operation: {}", e);
-                return Err(e);
-            }
-        },
-        Err(e) => {
-            println!("Failed to create device operation: {}", e);
-            return Err(e);
-        }
-    };
-
+    let device = BluetoothDevice::FromIdAsync(device_id)?.get()?;
+    let service = device.GetRfcommServicesAsync()?.get()?.Services()?.GetAt(1)?;
+    let socket = StreamSocket::new()?;
+    println!("Connecting to device: {:?}, {:?}", service.ConnectionHostName()?, service.ConnectionServiceName()?);
+    let _connection = socket.ConnectAsync(
+        &service.ConnectionHostName()?, 
+        &service.ConnectionServiceName()?)?.get()?;
     println!("Connected to device: {:?}", device.Name());
-    
-    // Get GATT services
-    let gatt_result = device.GetGattServicesAsync()?.get()?;
-    println!("Found {} GATT services", gatt_result.Services()?.Size()?);
-
-    // Create and maintain GATT session
-    let session = GattSession::FromDeviceIdAsync(&device.BluetoothDeviceId()?)?.get()?;
-    session.SetMaintainConnection(true);
-    println!("GATT session established and maintained");
-    
     Ok(())
 }
+
+// Attempting to connect to device with ID: "Bluetooth#Bluetooth04:7b:cb:29:40:b7-40:72:18:9e:4a:77"
+// Connecting to device: HostName(IUnknown(0x1b299afebc0)), "Bluetooth#Bluetooth04:7b:cb:29:40:b7-40:72:18:9e:4a:77#RFCOMM:00000000:{0000111e-0000-1000-8000-00805f9b34fb}"
