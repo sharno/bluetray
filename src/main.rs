@@ -129,14 +129,14 @@ async fn main() {
 
         match event {
             Event::NewEvents(tao::event::StartCause::Init) => {
-                let icon = Icon::from_rgba(vec![200, 200, 0, 0], 1, 1).unwrap();
+                let icon = Icon::from_rgba(vec![0, 0, 200, 255], 1, 1).unwrap();
 
                 // We create the icon once the event loop is actually running
                 // to prevent issues like https://github.com/tauri-apps/tray-icon/issues/90
                 tray_icon = Some(
                     TrayIconBuilder::new()
                         .with_menu(Box::new(tray_menu.clone()))
-                        .with_tooltip("tao - awesome windowing lib")
+                        .with_tooltip("Bluetray")
                         .with_icon(icon)
                         .build()
                         .unwrap(),
