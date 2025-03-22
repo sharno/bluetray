@@ -176,7 +176,7 @@ async fn get_paired_bluetooth_devices() -> Result<Vec<DeviceInformation>, Error>
 fn connect_to_bluetooth_device(device_id: &HSTRING) -> Result<StreamSocket, Error> {
     println!("Attempting to connect to device with ID: {:?}", device_id);
     let device = BluetoothDevice::FromIdAsync(device_id)?.get()?;
-    let service = device.GetRfcommServicesAsync()?.get()?.Services()?.GetAt(1)?;
+    let service = device.GetRfcommServicesAsync()?.get()?.Services()?.GetAt(0)?;
     let socket = StreamSocket::new()?;
     println!("Connecting to device: {:?}, {:?}", service.ConnectionHostName()?.ToString()?, service.ConnectionServiceName()?);
     let _connection = socket.ConnectAsync(
