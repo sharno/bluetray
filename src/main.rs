@@ -1,15 +1,6 @@
-// Copyright 2022-2022 Tauri Programme within The Commons Conservancy
-// SPDX-License-Identifier: Apache-2.0
-// SPDX-License-Identifier: MIT
-
-#![allow(unused)]
-
 use std::collections::HashMap;
 use std::vec;
 
-use btleplug::api::{Central, Manager as _, Peripheral, ScanFilter};
-use btleplug::platform::{Adapter, Manager};
-use std::time::Duration;
 use tao::{
     event::Event,
     event_loop::{ControlFlow, EventLoopBuilder},
@@ -23,8 +14,6 @@ use windows::core::{Error, RuntimeType, HSTRING};
 use windows::Devices::Bluetooth::GenericAttributeProfile::GattSession;
 use windows::Devices::Bluetooth::{BluetoothDevice, BluetoothLEDevice};
 use windows::Devices::Enumeration::DeviceInformation;
-use windows::Foundation::TypedEventHandler;
-use windows_future::IAsyncOperation;
 
 enum UserEvent {
     TrayIconEvent(tray_icon::TrayIconEvent),
@@ -149,30 +138,44 @@ async fn main() {
 }
 
 async fn get_paired_bluetooth_devices() -> Result<Vec<DeviceInformation>, Error> {
-    // Define a query for paired Bluetooth devices
+    // Define a query for paired Bluetooth LE devices
     let selector = BluetoothDevice::GetDeviceSelectorFromPairingState(true)?;
 
     // Find all paired devices
     let devices_operation = DeviceInformation::FindAllAsyncAqsFilter(&selector)?;
     let devices: Vec<_> = devices_operation.get()?.into_iter().collect();
 
-    // let mut device_names = Vec::new();
-
-    // Iterate through each device
-    // for device in devices {
-    //     if let Ok(name) = device.Name() {
-    //         device_names.push(name.to_string());
-    //     }
-    // }
-
     Ok(devices)
 }
 
 fn connect_to_bluetooth_device(device_id: &HSTRING) -> Result<(), Error> {
+    println!("Attempting to connect to device with ID: {:?}", device_id);
+    
     // Create connection operation
-    let device = BluetoothLEDevice::FromIdAsync(device_id)?.get()?;
-    let gatt_services = device.GetGattServicesAsync()?.get()?;
+    let device = match BluetoothLEDevice::FromIdAsync(device_id) {
+        Ok(operation) => match operation.get() {
+            Ok(device) => device,
+            Err(e) => {
+                println!("Failed to get device from operation: {}", e);
+                return Err(e);
+            }
+        },
+        Err(e) => {
+            println!("Failed to create device operation: {}", e);
+            return Err(e);
+        }
+    };
+
+    println!("Connected to device: {:?}", device.Name());
+    
+    // Get GATT services
+    let gatt_result = device.GetGattServicesAsync()?.get()?;
+    println!("Found {} GATT services", gatt_result.Services()?.Size()?);
+
+    // Create and maintain GATT session
     let session = GattSession::FromDeviceIdAsync(&device.BluetoothDeviceId()?)?.get()?;
     session.SetMaintainConnection(true);
+    println!("GATT session established and maintained");
+    
     Ok(())
 }
