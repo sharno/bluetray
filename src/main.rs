@@ -1,18 +1,17 @@
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::vec;
 
 use tao::{
     event::Event,
     event_loop::{ControlFlow, EventLoopBuilder},
 };
-use tokio::runtime::Runtime;
 use tray_icon::{
     menu::{AboutMetadata, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     Icon, TrayIconBuilder, TrayIconEvent,
 };
-use windows::{core::{Error, RuntimeType, HSTRING}, Devices::Bluetooth::Rfcomm::RfcommDeviceService, Networking::Sockets::{SocketProtectionLevel, StreamSocket, StreamSocketListener}};
-use windows::Devices::Bluetooth::GenericAttributeProfile::GattSession;
-use windows::Devices::Bluetooth::{BluetoothDevice, BluetoothLEDevice};
+use windows::{core::{Error, HSTRING}, Networking::Sockets::StreamSocket};
+use windows::Devices::Bluetooth::BluetoothDevice;
 use windows::Devices::Enumeration::DeviceInformation;
 
 enum UserEvent {
@@ -20,21 +19,59 @@ enum UserEvent {
     MenuEvent(tray_icon::menu::MenuEvent),
 }
 
+// This struct will manage active Bluetooth connections
+struct ConnectionManager {
+    active_connections: HashMap<String, StreamSocket>,
+}
+
+impl ConnectionManager {
+    fn new() -> Self {
+        Self {
+            active_connections: HashMap::new(),
+        }
+    }
+
+    fn connect_device(&mut self, device_id: &HSTRING) -> Result<(), Error> {
+        let device_id_str = device_id.to_string();
+        
+        // Check if already connected
+        if self.active_connections.contains_key(&device_id_str) {
+            println!("Device already connected: {}", device_id_str);
+            return Ok(());
+        }
+        
+        // Connect to the device
+        let socket = connect_to_bluetooth_device(device_id)?;
+        
+        // Store the connection
+        self.active_connections.insert(device_id_str, socket);
+        println!("Connection stored. Active connections: {}", self.active_connections.len());
+        
+        Ok(())
+    }
+
+    fn disconnect_device(&mut self, device_id: &str) -> bool {
+        self.active_connections.remove(device_id).is_some()
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
-    let rt = Runtime::new().unwrap();
+
+    // Create connection manager
+    let connection_manager = Arc::new(Mutex::new(ConnectionManager::new()));
 
     // set a tray event handler that forwards the event and wakes up the event loop
     let proxy = event_loop.create_proxy();
     TrayIconEvent::set_event_handler(Some(move |event| {
-        proxy.send_event(UserEvent::TrayIconEvent(event));
+        let _ = proxy.send_event(UserEvent::TrayIconEvent(event));
     }));
 
     // set a menu event handler that forwards the event and wakes up the event loop
     let proxy = event_loop.create_proxy();
     MenuEvent::set_event_handler(Some(move |event| {
-        proxy.send_event(UserEvent::MenuEvent(event));
+        let _ = proxy.send_event(UserEvent::MenuEvent(event));
     }));
 
     let tray_menu = Menu::new();
@@ -71,21 +108,20 @@ async fn main() {
             }),
         ),
         &PredefinedMenuItem::separator(),
-    ]);
+    ]).unwrap();
 
     // Add device menu items
     for item in &device_items {
-        tray_menu.append(item);
+        tray_menu.append(item).unwrap();
     }
 
-    tray_menu.append(&PredefinedMenuItem::separator());
-    tray_menu.append(&quit_i);
+    tray_menu.append(&PredefinedMenuItem::separator()).unwrap();
+    tray_menu.append(&quit_i).unwrap();
 
     let mut tray_icon = None;
 
-    let menu_channel = MenuEvent::receiver();
-    let tray_channel = TrayIconEvent::receiver();
-
+    let connection_manager_clone = connection_manager.clone();
+    
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
 
@@ -103,16 +139,6 @@ async fn main() {
                         .build()
                         .unwrap(),
                 );
-
-                // We have to request a redraw here to have the icon actually show up.
-                // Tao only exposes a redraw method on the Window so we use core-foundation directly.
-                #[cfg(target_os = "macos")]
-                unsafe {
-                    use objc2_core_foundation::{CFRunLoopGetMain, CFRunLoopWakeUp};
-
-                    let rl = CFRunLoopGetMain().unwrap();
-                    CFRunLoopWakeUp(&rl);
-                }
             }
 
             Event::UserEvent(UserEvent::TrayIconEvent(event)) => {
@@ -126,7 +152,9 @@ async fn main() {
                     tray_icon.take();
                     *control_flow = ControlFlow::Exit;
                 } else if let Some(device_id) = device_map.get(&event.id) {
-                    if let Err(e) = connect_to_bluetooth_device(device_id) {
+                    // Use connection manager to connect to the device
+                    let mut manager = connection_manager_clone.lock().unwrap();
+                    if let Err(e) = manager.connect_device(device_id) {
                         println!("Failed to connect to device: {}", e);
                     }
                 }
@@ -138,7 +166,6 @@ async fn main() {
 }
 
 async fn get_paired_bluetooth_devices() -> Result<Vec<DeviceInformation>, Error> {
-    // RfcommDeviceService::GetDeviceSelector(bluetoothdevice)
     let selector = BluetoothDevice::GetDeviceSelectorFromPairingState(true)?;
     let devices_operation = DeviceInformation::FindAllAsyncAqsFilter(&selector)?;
     let devices: Vec<_> = devices_operation.get()?.into_iter().collect();
@@ -146,19 +173,16 @@ async fn get_paired_bluetooth_devices() -> Result<Vec<DeviceInformation>, Error>
     Ok(devices)
 }
 
-fn connect_to_bluetooth_device(device_id: &HSTRING) -> Result<(), Error> {
+fn connect_to_bluetooth_device(device_id: &HSTRING) -> Result<StreamSocket, Error> {
     println!("Attempting to connect to device with ID: {:?}", device_id);
-    
     let device = BluetoothDevice::FromIdAsync(device_id)?.get()?;
     let service = device.GetRfcommServicesAsync()?.get()?.Services()?.GetAt(1)?;
     let socket = StreamSocket::new()?;
-    println!("Connecting to device: {:?}, {:?}", service.ConnectionHostName()?, service.ConnectionServiceName()?);
+    println!("Connecting to device: {:?}, {:?}", service.ConnectionHostName()?.ToString()?, service.ConnectionServiceName()?);
     let _connection = socket.ConnectAsync(
         &service.ConnectionHostName()?, 
         &service.ConnectionServiceName()?)?.get()?;
-    println!("Connected to device: {:?}", device.Name());
-    Ok(())
+    println!("Connected to device: {:?}", device.Name()?);
+    
+    Ok(socket)
 }
-
-// Attempting to connect to device with ID: "Bluetooth#Bluetooth04:7b:cb:29:40:b7-40:72:18:9e:4a:77"
-// Connecting to device: HostName(IUnknown(0x1b299afebc0)), "Bluetooth#Bluetooth04:7b:cb:29:40:b7-40:72:18:9e:4a:77#RFCOMM:00000000:{0000111e-0000-1000-8000-00805f9b34fb}"
