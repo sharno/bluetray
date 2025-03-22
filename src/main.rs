@@ -1,3 +1,5 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::vec;

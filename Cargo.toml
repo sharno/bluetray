@@ -17,3 +17,13 @@ windows = { version = "0.61.1", features = [
     "Devices_Bluetooth_Rfcomm",
 ] }
 windows-future = "0.2.0"
+
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
+
+[[bin]]
+name = "bluetray"
+path = "src/main.rs"
+
+[package.metadata.windows]
+subsystem = "windows"
